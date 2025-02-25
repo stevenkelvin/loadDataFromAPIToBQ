@@ -1,0 +1,12 @@
+{
+    "sqltools.connections": [
+        {
+            "name": "BigQuery",
+            "authenticator": "CLI",
+            "location": "asia-east2",
+            "previewLimit": 50,
+            "driver": "BigQuery",
+            "projectId": "wkcda-districtapp"
+        }
+    ]
+}
