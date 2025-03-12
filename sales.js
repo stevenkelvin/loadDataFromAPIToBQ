@@ -14,7 +14,7 @@ const insertFirbaseData = async (allData, d) => {
   let aosBqReturn, iosBqReturn, aos, ios; // declare outside so they're accessible everywhere
   let dataLoaded = false;
 
-const performanceQuery = `
+  const performanceQuery = `
       SELECT
         FORMAT_DATE('%Y-%m-%d', date) AS date,
         downloads,
@@ -26,8 +26,6 @@ const performanceQuery = `
     WHERE platform = @platform
 `;
 
-  await createTable(datasetId, tbl);
-
   if (await createTable(datasetId, tbl)) {
     console.log(`Table ${tbl} exists.`);
 
@@ -35,24 +33,23 @@ const performanceQuery = `
     if (apiData) {
       aos = apiData['334364831192'];
       ios = apiData['334364831261'];
-      
+
       clean(aos, 'Android');
       clean(ios, 'iOS');
 
       aosBqReturn = await bqData('Android', datasetId, tbl, performanceQuery);
-      //console.log(aosBqReturn);
-      
       aosBqReturn = (aosBqReturn[0] == []) ? aosBqReturn : aosBqReturn[0];
       iosBqReturn = await bqData('iOS', datasetId, tbl, performanceQuery);
       iosBqReturn = (iosBqReturn[0] == []) ? iosBqReturn : iosBqReturn[0]
-      
+
       const checkAndLoad = async (platform, bqReturn, data) => {
         if (!deepEqual(bqReturn, data)) {
           if (bqReturn) await clearBQData(platform, datasetId, tbl);
-            await loadDataToBQ(d, data, datasetId, tbl);
-            dataLoaded = true;
+          await loadDataToBQ(d, data, datasetId, tbl);
+          dataLoaded = true;
         } else {
-          console.log(`${platform} data for ${dateWith} is unchanged. Skipping load data to BigQuery.`);
+          let metricsData = tbl.split('_')[0];
+          console.log(`${platform} ${metricsData} data for ${dateWith} is unchanged. Skipping load data to BigQuery.`);
         }
       }
       await checkAndLoad('Android', aosBqReturn, aos);

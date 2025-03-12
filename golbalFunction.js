@@ -27,7 +27,8 @@ const getDataFromAPI = async (s, e, api) => {
 const bqData = async (platform, datasetId, tableId, query) => {
     const bigquery = new BigQuery({ projectId: "wkcda-districtapp" });
     const table = bigquery.dataset(datasetId).table(tableId);
-    console.log(`Returning ${platform} data from BigQuery`);
+    const metricsData = tableId.split('_')[0];
+    console.log(`Returning ${platform} ${metricsData} data from BigQuery`);
 
     const [metadata] = await table.getMetadata();
 

@@ -2,8 +2,12 @@
   "name": "insert-data-to-bigquery",
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "start": "node app.js"
+  },
   "dependencies": {
     "@google-cloud/bigquery": "^7.9.2",
-    "axios": "^1.7.9"
+    "axios": "^1.7.9",
+    "express": "^4.21.2"
   }
 }
