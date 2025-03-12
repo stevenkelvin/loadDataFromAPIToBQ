@@ -1,5 +1,0 @@
-cron:
-    - description: "daily transfer Appfigures data to Bigquery"
-      url: /cron
-      schedule: every day 08:00
-      timezone: Asia/Hong_Kong
