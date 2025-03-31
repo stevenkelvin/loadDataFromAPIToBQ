@@ -4,6 +4,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { styleText } from 'node:util';
+import https from 'https';
+import csvtojson from 'csvtojson';
 
 // Reuse the BigQuery instance across functions
 const bigquery = new BigQuery();
@@ -39,14 +41,14 @@ const getDataFromAPI = async (start, end, api) => {
   }
 };
 
-const bqData = async (plat, datasetId, tableId, query) => {
+const bqData = async (datasetId, tableId, query) => {
   const table = bigquery.dataset(datasetId).table(tableId);
   const metricsData = tableId.split('_')[0];
-  console.log(`Returning ${plat} ${metricsData} data from BigQuery`);
+  console.log(`Returning ${metricsData} data from BigQuery`);
   try {
     const [metadata] = await table.getMetadata();
     if (!metadata.schema) return {};
-    const options = { query, params: { platform: plat } };
+    const options = { query};
     const [results] = await bigquery.query(options);
     return results;
   } catch (err) {
@@ -69,15 +71,17 @@ const createTable = async (ds, tbl, schema) => {
   }
 };
 
-// Remove duplicates from API data array using deepEqual comparison
-const removeDuplicates = (apiArr, bqObj) => {
-  if (bqObj && Object.keys(bqObj).length > 0) {
-    // For each data item in apiArr, remove it if it deep equals any value in bqObj
-    return apiArr.filter(item =>
-      !Object.values(bqObj).some(bqItem => deepEqual(bqItem, item))
-    );
+const checkMatchingItems = (apiArr, bqArr) => {
+  // If there are API items but no corresponding BigQuery items, return false.
+  if (apiArr.length > 0 && (!Array.isArray(bqArr) || bqArr.length === 0)) {
+    return false;
   }
-  return apiArr;
+  for (const item of apiArr) {
+    if (!bqArr.some(bqItem => deepEqual(bqItem, item))) {
+      return false; // Return false if a non-matching item is found
+    }
+  }
+  return true; // Return true if every API item has a match in BigQuery
 };
 
 // A simple deep equality function
@@ -95,10 +99,10 @@ const deepEqual = (obj1, obj2) => {
   return true;
 };
 
-const loadDataToBQ = async (d, data, datasetId, tbl, schema) => {
-  console.log(`Loading ${data[0]?.platform} data to ${tbl}`);
+const loadDataToBQ = async (data, datasetId, tbl, schema) => {
+  console.log(`Loading data to ${tbl}`);
 
-  const tempFile = path.join(os.tmpdir(), `data_${tbl}_${data[0]?.platform}.json`);
+  const tempFile = path.join(os.tmpdir(), `data_${tbl}.json`);
   const ndjson = data.map(item => JSON.stringify(item)).join(`\n`);
   
   fs.writeFileSync(tempFile, ndjson);
@@ -109,11 +113,15 @@ const loadDataToBQ = async (d, data, datasetId, tbl, schema) => {
       location: 'asia-east2',
       schema: schema
     });
-    console.log(styleText('green', `Successfully loaded ${data[0]?.platform} data into ${tbl}`));
+    console.log(styleText('green', `Successfully loaded data into ${tbl}`));
   } catch (error) {
-    console.error(styleText('red', 'Error loading data:', error));
+    console.error(styleText('red', `Error loading data: ${error.stack || error}`));
   } finally {
-    fs.unlinkSync(tempFile);
+    try {
+      fs.unlinkSync(tempFile);
+    } catch (unlinkError) {
+      console.error(styleText('red', `Error deleting temporary file: ${unlinkError.stack || unlinkError}`));
+    }
   }
 };
 
@@ -127,12 +135,11 @@ const tableExists = async (ds, tbl) => {
   }
 };
 
-const clearBQData = async (platform, country, datasetId, tableId) => {
+const clearBQData = async (datasetId, tableId) => {
   const query = `
-    DELETE FROM \`wkcda-districtapp.${datasetId}.${tableId}\`
-    WHERE platform = @platform AND country = @country
+    TRUNCATE TABLE \`wkcda-districtapp.${datasetId}.${tableId}\`
   `;
-  const options = { query, params: { platform, country } };
+  const options = { query };
   try {
     await bigquery.query(options);
   } catch (e) {
@@ -153,4 +160,80 @@ const convertKeysToFloat = (obj, keys) => {
   return obj;
 };
 
-export { fmt, getDataFromAPI, bqData, createTable, deepEqual, removeDuplicates, loadDataToBQ, clearBQData, tableExists, convertKeysToFloat };
+const huaweiAPItoken = async () => {
+  const getTokenBody = JSON.stringify({
+    "grant_type": "client_credentials",
+    "client_id": "1644992515062896576",
+    "client_secret": "DF6E06CDCE683A33E3DF00B5958FD235BE4FC33304B3D536ADA4539CA8781C29"
+  });
+
+  const getTokenConfig = {
+    method: 'post',
+    maxBodyLength: Infinity,
+    url: 'https://connect-api.cloud.huawei.com/api/oauth2/v1/token',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    data: getTokenBody
+  };
+
+  console.log(`Getting huawei token...`);
+
+  try {
+    const response = await axios.request(getTokenConfig);
+    return response.data.access_token;
+  } catch (error) {
+    console.log(error);
+    return undefined;
+  }
+};
+
+const huaweiAPIdata = async (date, token) => {
+  let dataFilePath;
+  const getDownloadConfig = {
+    method: 'get',
+    maxBodyLength: Infinity,
+    url: `https://connect-api.cloud.huawei.com/api/report/distribution-operation-quality/v1/appDownloadExport/108854063?language=en-US&groupBy=countryId&startTime=${fmt(date, false)}&endTime=${fmt(date, false)}`,
+    headers: {
+      'client_id': '1644992515062896576',
+      'Authorization': `Bearer ${token}`
+    }
+  };
+
+  try {
+    const response = await axios.request(getDownloadConfig);
+    console.log(`Getting ${fmt(date, true)} huawei data from API...`);
+    
+    dataFilePath = response.data.fileURL;
+  } catch (error) {
+    console.log(error);
+    throw new Error('Failed to get download URL from Huawei API.');
+  }
+
+  if (!dataFilePath) {
+    throw new Error('Data file URL not found in the API response.');
+  }
+
+  return new Promise((resolve, reject) => {
+    https.get(dataFilePath, (response) => {
+      let csvData = '';
+      response.on('data', (chunk) => {
+        csvData += chunk;
+      });
+      response.on('end', () => {
+        csvtojson()
+          .fromString(csvData.trim())
+          .then((jsonObj) => {
+            resolve(jsonObj);
+          })
+          .catch((error) => {
+            reject(error);
+          });
+      });
+    }).on('error', (error) => {
+      reject(`Error downloading the CSV file: ${error.message}`);
+    });
+  });
+};
+
+export { fmt, getDataFromAPI, bqData, createTable, checkMatchingItems, loadDataToBQ, clearBQData, tableExists, convertKeysToFloat, huaweiAPItoken, huaweiAPIdata };

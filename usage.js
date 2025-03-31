@@ -1,11 +1,11 @@
-import { fmt, getDataFromAPI, bqData, createTable, removeDuplicates, loadDataToBQ, clearBQData, tableExists, convertKeysToFloat } from './golbalFunction.js';
+import { fmt, getDataFromAPI, bqData, createTable, checkMatchingItems, loadDataToBQ, clearBQData, tableExists, convertKeysToFloat } from './golbalFunction.js';
 import { styleText } from 'node:util';
 
 const datasetId = "appfigures";
 
 const clean = (row, platform) => {
   row.platform = platform;
-  ['storefront', 'store', 'product_id', 'crashes', 'screen_views'].forEach(prop => delete row[prop]);
+  ['storefront', 'store', 'product_id', 'crashes', 'screen_views', 'iso'].forEach(prop => delete row[prop]);
   return row;
 };
 
@@ -27,7 +27,6 @@ const schema = {
     { name: 'sessions_per_user', type: 'FLOAT' },
     { name: 'screen_views_per_user', type: 'FLOAT' },
     { name: 'engagement_rate', type: 'FLOAT' },
-    { name: 'iso', type: 'STRING' },
     { name: 'country', type: 'STRING' }
   ]
 };
@@ -36,8 +35,7 @@ const insertFirebaseData = async (allData, d) => {
   const dateWith = fmt(d, true);
   const dateWithout = fmt(d, false);
   const tbl = `usage_${dateWithout}`;
-  let aosData, iosData, aosBqReturn = [], iosBqReturn = [];
-  let dataLoaded = false;
+  let aosData, iosData, bqReturn = [];
 
   // Build the query for fetching data per platform
   const firebaseQuery = `
@@ -58,10 +56,8 @@ const insertFirebaseData = async (allData, d) => {
       sessions_per_user,
       screen_views_per_user,
       engagement_rate,
-      iso,
       country
     FROM \`wkcda-districtapp.appfigures.${tbl}\`
-    WHERE platform = @platform
   `;
 
   // Proceed to process API data if available for the date
@@ -102,62 +98,41 @@ const insertFirebaseData = async (allData, d) => {
     aosData = aosData.map(item => convertKeysToFloat(item, keysToConvert));
     iosData = iosData.map(item => convertKeysToFloat(item, keysToConvert));
 
+    const data = [...aosData, ...iosData];
+
     // First, check if the table exists
     if (!await tableExists(datasetId, tbl)) {
-      if (aosData.length > 0 || iosData.length > 0) {
-        // Create the table with the provided schema
+      if (data.length > 0) {
+        // With a brand new table, load all API data right away
         await createTable(datasetId, tbl, schema);
         console.log(styleText('green', `Table ${tbl} created with schema.`));
       }
     } else {
       console.log(styleText('yellow', `Table ${tbl} exists.`));
-      aosBqReturn = await bqData('Android', datasetId, tbl, firebaseQuery);
-      iosBqReturn = await bqData('iOS', datasetId, tbl, firebaseQuery);
+      bqReturn = await bqData(datasetId, tbl, firebaseQuery);
     }
-    const aosNewData = removeDuplicates(aosData, aosBqReturn);
-    const iosNewData = removeDuplicates(iosData, iosBqReturn);
 
-    const checkAndLoad = async (platform, bqReturn, newData) => {
-      if (newData.length > 0) {
-        if (bqReturn.length > 0) {
-          // Clear BQ data for the countries represented in newData
-          await Promise.all(newData.map(async item => {
-            await clearBQData(platform, item.country, datasetId, tbl);
-          }));
-        }
-        await loadDataToBQ(d, newData, datasetId, tbl, schema);
-
-        console.log(styleText('yellow', `Loaded new ${platform} data to ${tbl}`));
-        dataLoaded = true;
-      } else {
-        const metricsData = tbl.split('_')[0];
-        console.log(styleText('yellow', `${platform} ${metricsData} data for ${dateWith} is unchanged. Skipping load.`));
+    if (!checkMatchingItems(data, bqReturn)) {
+      if (bqReturn.length > 0) {
+        await clearBQData(datasetId, tbl);
       }
-    };
+      await loadDataToBQ(data, datasetId, tbl, schema);
 
-    await Promise.all(['Android', 'iOS'].map(async platform => {
-      const data = platform === 'Android' ? aosNewData : iosNewData;
-      const bqReturn = platform === 'Android' ? aosBqReturn : iosBqReturn;
-      if (data.length > 0) {
-        await checkAndLoad(platform, bqReturn, data);
-      }
-    }));
+      console.log(styleText('yellow', `Loaded new data to ${tbl}`));
+    } else {
+      const metricsData = tbl.split('_')[0];
+      console.log(styleText('yellow', `${metricsData} data for ${dateWith} is unchanged. Skipping load.`));
+    }
   } else {
     console.log(styleText('red', `${d} is not available in the API.`));
   }
-  return { tbl, dataLoaded };
 };
+
 const processFirebaseData = async (start, end, api) => {
   const allData = await getDataFromAPI(start, end, api);
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
     try {
-      const result = await insertFirebaseData(allData, d);
-      const { tbl, dataLoaded } = result;
-      if (dataLoaded) {
-        console.log(styleText('yellow', `Data loaded to ${datasetId}.${tbl}\n`));
-      } else {
-        console.log(styleText('yellow', `No changes for ${tbl}\n`));
-      }
+      await insertFirebaseData(allData, d);
     } catch (e) {
       console.error(styleText('red', `Failed ${fmt(d, true)}: ${e.message}\n`));
     }
