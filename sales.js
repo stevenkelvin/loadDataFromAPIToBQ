@@ -12,7 +12,7 @@ const clean = (row, p) => {
   }
   else if (p === 'Huawei') {
     ['Valid impressions', 'Details UV (reported by client)', 'Valid impression CTR', 'Details page conversion rate', 'Successful installs', 'Installation success rate', 'Sharings', 'Icon clicks', 'New installs', 'Total uninstalls'].forEach(prop => delete row[prop]);
-    row['Country/Region'] = row['Country/Region'].replace('Hong Kong(China)', 'Hong Kong').replace('Chinese mainland', 'China').replace('Macau(China)', 'Macao').replace('Taiwan(China)', 'Taiwan');
+    row['Country/Region'] = row['Country/Region'].replace('Hong Kong(China)', 'Hong Kong').replace('Chinese mainland', 'China').replace('Macau(China)', 'Macao').replace('Taiwan(China)', 'Taiwan').replace('UK', 'United Kingdom');
     row['country'] = row['Country/Region'];
     delete row['Country/Region'];
 
